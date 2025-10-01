@@ -1,0 +1,1821 @@
+--// Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+local Stats = game:GetService("Stats")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Lighting = game:GetService("Lighting")
+local Terrain = workspace.Terrain
+
+--// CONFIG
+local targetPart = "Head"
+local lerpSpeed = 0.12
+local teamCheck = true
+local wallCheck = true
+local aimbotEnabled = true
+local visualsEnabled = true
+local fullLockEnabled = false
+local autoTargetEnabled = true
+local maxTargetDistance = 400
+local realisticMode = false
+
+-- NEW FEATURES FROM ARSENAL
+local hitboxEnabled = false
+local hitboxSize = 10
+local hitboxTransparency = 0.6
+local antiAimEnabled = false
+local spinSpeed = 10
+local xrayEnabled = false
+local rainbowGunEnabled = false
+local noRecoilEnabled = false
+local noSpreadEnabled = false
+local fastFireRateEnabled = false
+local infiniteAmmoV1 = false
+local infiniteAmmoV2 = false
+
+-- NEW FEATURES REQUESTED
+local thirdPersonEnabled = false
+local thirdPersonDistance = 15
+local panicKey = Enum.KeyCode.Delete
+local brightSkinsEnabled = false
+local streamModeEnabled = false
+local noclipEnabled = false
+local noclipSpeed = 50
+
+-- MOVEMENT
+local noclipConnection = nil
+
+-- ESP CONFIG WITH TEAM CHECK
+local esp2DBoxEnabled = false
+local espDistanceEnabled = false
+local espTracersEnabled = false
+local espRGBMode = false
+local espTeamCheck = true
+local espShowTeam = false
+local espBoxes = {}
+local esp2DBoxes = {}
+local espTracers = {}
+local espSize = Vector3.new(2, 5, 2)
+local espColor = Color3.fromRGB(255, 255, 255)
+local espTeamColor = Color3.fromRGB(100, 255, 100)
+local espEnemyColor = Color3.fromRGB(255, 100, 100)
+local espRGBHue = 0
+
+-- FPS BOOSTER CONFIG
+local fpsBoostEnabled = false
+local fpsBoostLevel = 1
+local originalSettings = {}
+local originalMaterials = {}
+local originalLighting = {}
+local removedObjects = {}
+
+-- ADMIN DETECTION
+local adminCheckEnabled = false
+local knownAdmins = {}
+
+-- PERFORMANCE
+local showPerformance = false
+local frameCount = 0
+local lastFPSUpdate = 0
+local currentFPS = 0
+local scriptStartTime = tick()
+
+-- FOV CONFIG (Using the working method)
+local FOVRadius = 100
+local showFOVCircle = true
+
+-- Create FOV circle using the working method
+local FOVring = Drawing.new("Circle")
+FOVring.Visible = true
+FOVring.Thickness = 2
+FOVring.Color = Color3.fromRGB(0, 255, 255) -- Cyan color
+FOVring.Filled = false
+FOVring.Radius = FOVRadius
+FOVring.Position = Camera.ViewportSize / 2
+
+-- Create outline for better visibility
+local FOVringOutline = Drawing.new("Circle")
+FOVringOutline.Visible = true
+FOVringOutline.Thickness = 3
+FOVringOutline.Color = Color3.fromRGB(0, 0, 0) -- Black outline
+FOVringOutline.Filled = false
+FOVringOutline.Radius = FOVRadius + 2
+FOVringOutline.Position = Camera.ViewportSize / 2
+FOVringOutline.Transparency = 0.5
+
+-- Function to update FOV circle position
+local function updateFOVCircle()
+    local camViewportSize = Camera.ViewportSize
+    FOVring.Position = camViewportSize / 2
+    FOVringOutline.Position = camViewportSize / 2
+    FOVring.Radius = FOVRadius
+    FOVringOutline.Radius = FOVRadius + 2
+end
+
+-- TARGETING STABILITY
+local targetEvaluationInterval = 0.3
+local minScoreImprovement = 0.15
+
+-- State
+local currentTarget = nil
+local lastTargetEvaluation = 0
+local jumpConnection = nil
+local gyro = nil
+
+-- Store original values
+local originalProperties = {}
+local hitboxOriginalSizes = {}
+local brightSkinsOriginalMaterials = {}
+
+-- REALISTIC AIM VARIABLES
+local realisticNoise = 0
+local realisticSway = 0
+
+-- NOTIFICATION SYSTEM
+local notifications = {}
+
+local function showNotification(text, color)
+    local notif = Drawing.new("Text")
+    notif.Visible = true
+    notif.Center = true
+    notif.Font = 2
+    notif.Color = color or Color3.fromRGB(255, 255, 255)
+    notif.Text = text
+    notif.Size = 18
+    notif.Position = Vector2.new(Camera.ViewportSize.X / 2, 60)
+
+    table.insert(notifications, notif)
+
+    spawn(function()
+        wait(2.5)
+        pcall(function() notif:Remove() end)
+        for i, n in ipairs(notifications) do
+            if n == notif then
+                table.remove(notifications, i)
+                break
+            end
+        end
+    end)
+end
+
+-- BRIGHT SKINS FUNCTION
+local function toggleBrightSkins()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player.Character then
+            for _, part in pairs(player.Character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    if brightSkinsEnabled then
+                        if not brightSkinsOriginalMaterials[part] then
+                            brightSkinsOriginalMaterials[part] = {
+                                Material = part.Material,
+                                Color = part.Color
+                            }
+                        end
+                        part.Material = Enum.Material.Neon
+                        if player.Team == LocalPlayer.Team then
+                            part.Color = Color3.fromRGB(0, 255, 0) -- Green for teammates
+                        else
+                            part.Color = Color3.fromRGB(255, 0, 0) -- Red for enemies
+                        end
+                    else
+                        if brightSkinsOriginalMaterials[part] then
+                            part.Material = brightSkinsOriginalMaterials[part].Material
+                            part.Color = brightSkinsOriginalMaterials[part].Color
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- THIRD PERSON FUNCTION
+local function updateThirdPerson()
+    if thirdPersonEnabled then
+        LocalPlayer.CameraMaxZoomDistance = thirdPersonDistance
+        LocalPlayer.CameraMinZoomDistance = thirdPersonDistance
+        LocalPlayer.CameraMode = Enum.CameraMode.Classic
+    else
+        LocalPlayer.CameraMaxZoomDistance = 0.5
+        LocalPlayer.CameraMinZoomDistance = 0.5
+        LocalPlayer.CameraMode = Enum.CameraMode.LockFirstPerson
+    end
+end
+
+-- NOCLIP FUNCTION
+local function setupNoclip()
+    if noclipConnection then
+        noclipConnection:Disconnect()
+        noclipConnection = nil
+    end
+    
+    if noclipEnabled then
+        noclipConnection = RunService.Heartbeat:Connect(function()
+            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = false
+                    end
+                end
+                
+                local humanoid = LocalPlayer.Character:FindFirstChild("Humanoid")
+                if humanoid then
+                    humanoid:ChangeState(11) -- Physics state
+                end
+            end
+        end)
+    else
+        if LocalPlayer.Character then
+            for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
+                if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                    part.CanCollide = true
+                end
+            end
+        end
+    end
+end
+
+-- STREAM MODE FUNCTION
+local function toggleStreamMode()
+    if streamModeEnabled then
+        visualsEnabled = false
+        esp2DBoxEnabled = false
+        espTracersEnabled = false
+        espDistanceEnabled = false
+        showFOVCircle = false
+        showPerformance = false
+        FOVring.Visible = false
+        FOVringOutline.Visible = false
+        
+        -- Hide all ESP
+        for _, box in pairs(espBoxes) do
+            if box and box.lines then
+                for _, line in pairs(box.lines) do
+                    line.Visible = false
+                end
+            end
+        end
+        
+        showNotification("STREAM MODE: ON - All visuals hidden", Color3.fromRGB(100, 100, 255))
+    else
+        showNotification("STREAM MODE: OFF", Color3.fromRGB(255, 100, 100))
+    end
+end
+
+-- FPS BOOSTER FUNCTIONS
+local function applyFPSBoost()
+    if not fpsBoostEnabled then return end
+    
+    originalLighting.GlobalShadows = Lighting.GlobalShadows
+    originalLighting.FogEnd = Lighting.FogEnd
+    originalLighting.Brightness = Lighting.Brightness
+    originalLighting.ClockTime = Lighting.ClockTime
+    originalLighting.GeographicLatitude = Lighting.GeographicLatitude
+    originalLighting.ExposureCompensation = Lighting.ExposureCompensation
+    
+    if fpsBoostLevel >= 1 then
+        Lighting.GlobalShadows = false
+        settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+        
+        for _, v in pairs(Lighting:GetChildren()) do
+            if v:IsA("BlurEffect") or v:IsA("SunRaysEffect") or v:IsA("ColorCorrectionEffect") 
+               or v:IsA("BloomEffect") or v:IsA("DepthOfFieldEffect") then
+                originalSettings[v] = v.Enabled
+                v.Enabled = false
+            end
+        end
+    end
+    
+    if fpsBoostLevel >= 2 then
+        Lighting.FogEnd = 9e9
+        Lighting.Brightness = 0
+        
+        Terrain.WaterWaveSize = 0
+        Terrain.WaterWaveSpeed = 0
+        Terrain.WaterReflectance = 0
+        Terrain.WaterTransparency = 0
+        
+        for _, v in pairs(workspace:GetDescendants()) do
+            if v:IsA("ParticleEmitter") or v:IsA("Trail") then
+                originalSettings[v] = v.Enabled
+                v.Enabled = false
+            elseif v:IsA("Fire") or v:IsA("Smoke") or v:IsA("Sparkles") then
+                originalSettings[v] = v.Enabled
+                v.Enabled = false
+            end
+        end
+    end
+    
+    if fpsBoostLevel >= 3 then
+        for _, v in pairs(workspace:GetDescendants()) do
+            if v:IsA("BasePart") and not v.Parent:FindFirstChild("Humanoid") then
+                originalMaterials[v] = v.Material
+                v.Material = Enum.Material.Plastic
+                v.Reflectance = 0
+                v.CastShadow = false
+            elseif v:IsA("Decal") or v:IsA("Texture") then
+                originalSettings[v] = v.Transparency
+                v.Transparency = 1
+            elseif v:IsA("MeshPart") then
+                originalMaterials[v] = v.Material
+                v.Material = Enum.Material.Plastic
+                v.Reflectance = 0
+                v.CastShadow = false
+            end
+        end
+        
+        settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+        settings().Rendering.MeshPartDetailLevel = Enum.MeshPartDetailLevel.Level01
+    end
+    
+    showNotification("FPS BOOST LEVEL " .. fpsBoostLevel .. " ACTIVATED", Color3.fromRGB(100, 255, 100))
+end
+
+local function removeFPSBoost()
+    for prop, value in pairs(originalLighting) do
+        Lighting[prop] = value
+    end
+    
+    for obj, value in pairs(originalSettings) do
+        if obj and obj.Parent then
+            pcall(function()
+                if obj:IsA("PostEffect") or obj:IsA("ParticleEmitter") or obj:IsA("Trail") then
+                    obj.Enabled = value
+                elseif obj:IsA("Decal") or obj:IsA("Texture") then
+                    obj.Transparency = value
+                end
+            end)
+        end
+    end
+    
+    for obj, material in pairs(originalMaterials) do
+        if obj and obj.Parent then
+            pcall(function()
+                obj.Material = material
+                obj.Reflectance = 0
+                obj.CastShadow = true
+            end)
+        end
+    end
+    
+    Terrain.WaterWaveSize = 1
+    Terrain.WaterWaveSpeed = 10
+    Terrain.WaterReflectance = 1
+    Terrain.WaterTransparency = 1
+    
+    settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic
+    
+    originalSettings = {}
+    originalMaterials = {}
+    originalLighting = {}
+    
+    showNotification("FPS BOOST DISABLED", Color3.fromRGB(255, 100, 100))
+end
+
+-- INFINITE AMMO FUNCTIONS
+local function setupInfiniteAmmo()
+    if infiniteAmmoV1 then
+        pcall(function()
+            if ReplicatedStorage:FindFirstChild("wkspc") and ReplicatedStorage.wkspc:FindFirstChild("CurrentCurse") then
+                ReplicatedStorage.wkspc.CurrentCurse.Value = "Infinite Ammo"
+            end
+        end)
+    else
+        pcall(function()
+            if ReplicatedStorage:FindFirstChild("wkspc") and ReplicatedStorage.wkspc:FindFirstChild("CurrentCurse") then
+                ReplicatedStorage.wkspc.CurrentCurse.Value = ""
+            end
+        end)
+    end
+end
+
+spawn(function()
+    while true do
+        wait(0.1)
+        if infiniteAmmoV2 then
+            pcall(function()
+                local playerGui = LocalPlayer.PlayerGui
+                if playerGui:FindFirstChild("GUI") and playerGui.GUI:FindFirstChild("Client") then
+                    local variables = playerGui.GUI.Client:FindFirstChild("Variables")
+                    if variables then
+                        if variables:FindFirstChild("ammocount") then
+                            variables.ammocount.Value = 99
+                        end
+                        if variables:FindFirstChild("ammocount2") then
+                            variables.ammocount2.Value = 99
+                        end
+                    end
+                end
+            end)
+        end
+    end
+end)
+
+--// HELPERS
+local function isEnemy(player)
+    if not player.Team or not LocalPlayer.Team then return true end
+    return player.Team ~= LocalPlayer.Team
+end
+
+local function getESPColorForPlayer(player)
+    if espRGBMode then
+        return Color3.fromHSV(espRGBHue, 1, 1)
+    end
+    
+    if espTeamCheck then
+        if isEnemy(player) then
+            return espEnemyColor
+        else
+            return espTeamColor
+        end
+    else
+        return espColor
+    end
+end
+
+local function shouldShowESP(player)
+    if streamModeEnabled then return false end
+    if player == LocalPlayer then return false end
+    
+    if espTeamCheck then
+        if isEnemy(player) then
+            return true
+        else
+            return espShowTeam
+        end
+    else
+        return true
+    end
+end
+
+local function hasLineOfSight(part, character)
+    if not part or not part.Position or not character then return false end
+    
+    if not wallCheck then
+        return true
+    end
+    
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character, character}
+    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+    rayParams.IgnoreWater = true
+    
+    local origin = Camera.CFrame.Position
+    local direction = part.Position - origin
+    
+    local ignoredParts = {}
+    
+    for attempt = 1, 5 do
+        local result = workspace:Raycast(origin, direction, rayParams)
+        
+        if not result then
+            return true
+        end
+        
+        if result.Instance:IsDescendantOf(character) then
+            return true
+        end
+        
+        local hitPart = result.Instance
+        
+        local isInvisibleBarrier = (
+            hitPart.Transparency >= 0.99 and
+            (not hitPart.CanCollide or hitPart.Material == Enum.Material.ForceField)
+        )
+        
+        local partName = hitPart.Name:lower()
+        local isNamedInvisibleWall = (
+            partName:find("invis") or 
+            partName:find("barrier") and hitPart.Transparency > 0.9 or
+            partName:find("glass") and hitPart.Transparency > 0.8
+        )
+        
+        if isInvisibleBarrier or isNamedInvisibleWall then
+            table.insert(ignoredParts, hitPart)
+            rayParams.FilterDescendantsInstances = {LocalPlayer.Character, character, unpack(ignoredParts)}
+        else
+            return false
+        end
+    end
+    
+    return false
+end
+
+local function getCurrentESPColor()
+    if espRGBMode then
+        return Color3.fromHSV(espRGBHue, 1, 1)
+    else
+        return espColor
+    end
+end
+
+local function getRealisticAimCFrame(targetPos)
+    if not realisticMode then
+        return CFrame.new(Camera.CFrame.Position, targetPos)
+    end
+    
+    local time = tick()
+    
+    realisticSway = math.sin(time * 2) * 0.002 + math.sin(time * 3.7) * 0.001
+    
+    local tremor = Vector3.new(
+        math.random() * 0.001 - 0.0005,
+        math.random() * 0.001 - 0.0005,
+        0
+    )
+    
+    local adjustedTarget = targetPos + tremor
+    local lookCFrame = CFrame.new(Camera.CFrame.Position, adjustedTarget)
+    
+    lookCFrame = lookCFrame * CFrame.Angles(realisticSway, realisticSway * 0.7, 0)
+    
+    return lookCFrame
+end
+
+local function getBestTarget(ignoreCurrent)
+    if not autoTargetEnabled then 
+        return nil, math.huge 
+    end
+    
+    local bestPlayer, bestScore = nil, math.huge
+    local screenCenter = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+
+    for _, player in pairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if ignoreCurrent and player == currentTarget then continue end
+
+        if player.Character
+        and player.Character:FindFirstChild(targetPart)
+        and player.Character:FindFirstChild("Humanoid")
+        and player.Character.Humanoid.Health > 0 then
+
+            if teamCheck and not isEnemy(player) then continue end
+
+            local part = player.Character[targetPart]
+            local dist3D = (part.Position - Camera.CFrame.Position).Magnitude
+            
+            if dist3D > maxTargetDistance then continue end
+            
+            local isVisible = hasLineOfSight(part, player.Character)
+
+            if wallCheck and not isVisible then continue end
+
+            local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+            local score = dist3D
+
+            if onScreen then
+                local dist2D = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+                score = dist3D * 0.6 + dist2D * 0.4
+            end
+
+            if isVisible then
+                score = score * 0.8
+            end
+
+            if player == currentTarget then
+                score = score * 0.92
+            end
+
+            if score < bestScore then
+                bestScore, bestPlayer = score, player
+            end
+        end
+    end
+    return bestPlayer, bestScore
+end
+
+local function getTargetInFOV()
+    local bestPlayer, bestDist, bestVisible = nil, math.huge, false
+    local screenCenter = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer
+        and player.Character
+        and player.Character:FindFirstChild(targetPart)
+        and player.Character:FindFirstChild("Humanoid")
+        and player.Character.Humanoid.Health > 0 then
+            if teamCheck and not isEnemy(player) then continue end
+
+            local part = player.Character[targetPart]
+            
+            local dist3D = (part.Position - Camera.CFrame.Position).Magnitude
+            if dist3D > maxTargetDistance then continue end
+            
+            local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+            if not onScreen then continue end
+
+            local isVisible = hasLineOfSight(part, player.Character)
+            if wallCheck and not isVisible then continue end
+
+            local dist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+            if dist > FOVRadius then continue end
+
+            if not bestPlayer
+            or (isVisible and not bestVisible)
+            or (isVisible == bestVisible and dist < bestDist) then
+                bestPlayer, bestDist, bestVisible = player, dist, isVisible
+            end
+        end
+    end
+    return bestPlayer
+end
+
+local function updateTarget()
+    if not autoTargetEnabled then
+        currentTarget = nil
+        return
+    end
+
+    local now = tick()
+
+    if now - lastTargetEvaluation < targetEvaluationInterval then
+        if currentTarget then
+            if not currentTarget.Character
+            or not currentTarget.Character:FindFirstChild(targetPart)
+            or not currentTarget.Character:FindFirstChild("Humanoid")
+            or currentTarget.Character.Humanoid.Health <= 0 then
+                currentTarget = nil
+            else
+                local dist = (currentTarget.Character[targetPart].Position - Camera.CFrame.Position).Magnitude
+                if dist > maxTargetDistance then
+                    currentTarget = nil
+                elseif wallCheck and not hasLineOfSight(currentTarget.Character[targetPart], currentTarget.Character) then
+                    currentTarget = nil
+                end
+            end
+        end
+        return
+    end
+
+    lastTargetEvaluation = now
+
+    if currentTarget then
+        if not currentTarget.Character
+        or not currentTarget.Character:FindFirstChild(targetPart)
+        or not currentTarget.Character:FindFirstChild("Humanoid")
+        or currentTarget.Character.Humanoid.Health <= 0 then
+            currentTarget = nil
+        else
+            local dist = (currentTarget.Character[targetPart].Position - Camera.CFrame.Position).Magnitude
+            if dist > maxTargetDistance then
+                currentTarget = nil
+            elseif wallCheck and not hasLineOfSight(currentTarget.Character[targetPart], currentTarget.Character) then
+                currentTarget = nil
+            else
+                local bestPlayer, bestScore = getBestTarget(true)
+                local currentPlayer, currentScore = getBestTarget(false)
+
+                if bestPlayer and bestScore < currentScore * (1 - minScoreImprovement) then
+                    currentTarget = bestPlayer
+                end
+                return
+            end
+        end
+    end
+
+    currentTarget = getBestTarget(false)
+end
+
+-- 2D BOX ESP
+local function create2DBox(player)
+    local box = {
+        player = player,
+        topLeft = Drawing.new("Line"),
+        topRight = Drawing.new("Line"),
+        bottomLeft = Drawing.new("Line"),
+        bottomRight = Drawing.new("Line"),
+        distanceLabel = Drawing.new("Text")
+    }
+    
+    local color = getESPColorForPlayer(player)
+    
+    for _, line in pairs({box.topLeft, box.topRight, box.bottomLeft, box.bottomRight}) do
+        line.Visible = false
+        line.Color = color
+        line.Thickness = 2
+    end
+    
+    box.distanceLabel.Visible = false
+    box.distanceLabel.Color = color
+    box.distanceLabel.Size = 14
+    box.distanceLabel.Center = true
+    box.distanceLabel.Font = 2
+    
+    return box
+end
+
+local function update2DBox(box)
+    if not shouldShowESP(box.player) then
+        for _, line in pairs({box.topLeft, box.topRight, box.bottomLeft, box.bottomRight}) do
+            line.Visible = false
+        end
+        box.distanceLabel.Visible = false
+        return false
+    end
+    
+    local character = box.player.Character
+    if not character or not character:FindFirstChild("HumanoidRootPart") then
+        for _, line in pairs({box.topLeft, box.topRight, box.bottomLeft, box.bottomRight}) do
+            line.Visible = false
+        end
+        box.distanceLabel.Visible = false
+        return false
+    end
+    
+    local hrp = character.HumanoidRootPart
+    local head = character:FindFirstChild("Head")
+    if not head then return false end
+    
+    local distance = (hrp.Position - Camera.CFrame.Position).Magnitude
+    
+    local top = head.Position + Vector3.new(0, 0.5, 0)
+    local bottom = hrp.Position - Vector3.new(0, 3, 0)
+    
+    local topScreen, topVisible = Camera:WorldToViewportPoint(top)
+    local bottomScreen, bottomVisible = Camera:WorldToViewportPoint(bottom)
+    
+    if topVisible and bottomVisible then
+        local height = math.abs(topScreen.Y - bottomScreen.Y)
+        local width = height * 0.6
+        
+        local topLeft = Vector2.new(topScreen.X - width/2, topScreen.Y)
+        local topRight = Vector2.new(topScreen.X + width/2, topScreen.Y)
+        local bottomLeft = Vector2.new(bottomScreen.X - width/2, bottomScreen.Y)
+        local bottomRight = Vector2.new(bottomScreen.X + width/2, bottomScreen.Y)
+        
+        local cornerSize = width * 0.25
+        
+        local currentColor = getESPColorForPlayer(box.player)
+        for _, line in pairs({box.topLeft, box.topRight, box.bottomLeft, box.bottomRight}) do
+            line.Color = currentColor
+        end
+        box.distanceLabel.Color = currentColor
+        
+        if esp2DBoxEnabled then
+            box.topLeft.From = topLeft
+            box.topLeft.To = Vector2.new(topLeft.X + cornerSize, topLeft.Y)
+            box.topLeft.Visible = true
+            
+            box.topRight.From = Vector2.new(topRight.X - cornerSize, topRight.Y)
+            box.topRight.To = topRight
+            box.topRight.Visible = true
+            
+            box.bottomLeft.From = bottomLeft
+            box.bottomLeft.To = Vector2.new(bottomLeft.X + cornerSize, bottomLeft.Y)
+            box.bottomLeft.Visible = true
+            
+            box.bottomRight.From = Vector2.new(bottomRight.X - cornerSize, bottomRight.Y)
+            box.bottomRight.To = bottomRight
+            box.bottomRight.Visible = true
+        else
+            for _, line in pairs({box.topLeft, box.topRight, box.bottomLeft, box.bottomRight}) do
+                line.Visible = false
+            end
+        end
+        
+        if espDistanceEnabled then
+            box.distanceLabel.Text = math.floor(distance) .. "m"
+            box.distanceLabel.Position = Vector2.new(bottomScreen.X, bottomScreen.Y + 10)
+            box.distanceLabel.Visible = true
+        else
+            box.distanceLabel.Visible = false
+        end
+    else
+        for _, line in pairs({box.topLeft, box.topRight, box.bottomLeft, box.bottomRight}) do
+            line.Visible = false
+        end
+        box.distanceLabel.Visible = false
+    end
+    
+    return true
+end
+
+-- 3D OUTLINE BOX
+local function createOutlineBox(character, player)
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+
+    local half = espSize / 2
+    local offset = Vector3.new(0, 0, 0)
+
+    local corners = {
+        hrp.Position - half + offset,
+        hrp.Position + Vector3.new(half.X, -half.Y, -half.Z) + offset,
+        hrp.Position + Vector3.new(half.X, -half.Y, half.Z) + offset,
+        hrp.Position + Vector3.new(-half.X, -half.Y, half.Z) + offset,
+        hrp.Position + Vector3.new(-half.X, half.Y, -half.Z) + offset,
+        hrp.Position + Vector3.new(half.X, half.Y, -half.Z) + offset,
+        hrp.Position + half + offset,
+        hrp.Position + Vector3.new(-half.X, half.Y, half.Z) + offset
+    }
+
+    local edges = {
+        {1,2}, {2,3}, {3,4}, {4,1},
+        {5,6}, {6,7}, {7,8}, {8,5},
+        {1,5}, {2,6}, {3,7}, {4,8}
+    }
+
+    local lines = {}
+    local color = getESPColorForPlayer(player)
+    
+    for _, edge in ipairs(edges) do
+        local line = Drawing.new("Line")
+        line.Visible = false
+        line.Color = color
+        line.Thickness = 1.5
+        line.From = Vector2.new(0,0)
+        line.To = Vector2.new(0,0)
+        lines[#lines+1] = line
+    end
+
+    return {
+        lines = lines,
+        character = character,
+        player = player,
+        corners = corners,
+        edges = edges
+    }
+end
+
+local function updateOutlineBox(box)
+    if not shouldShowESP(box.player) then
+        for _, line in ipairs(box.lines) do
+            line.Visible = false
+        end
+        return false
+    end
+    
+    if not box.character or not box.character:FindFirstChild("HumanoidRootPart") then return false end
+
+    local hrp = box.character.HumanoidRootPart
+    local size = espSize
+    local half = size / 2
+    local offset = Vector3.new(0, 0, 0)
+
+    box.corners = {
+        hrp.Position - half + offset,
+        hrp.Position + Vector3.new(half.X, -half.Y, -half.Z) + offset,
+        hrp.Position + Vector3.new(half.X, -half.Y, half.Z) + offset,
+        hrp.Position + Vector3.new(-half.X, -half.Y, half.Z) + offset,
+        hrp.Position + Vector3.new(-half.X, half.Y, -half.Z) + offset,
+        hrp.Position + Vector3.new(half.X, half.Y, -half.Z) + offset,
+        hrp.Position + half + offset,
+        hrp.Position + Vector3.new(-half.X, half.Y, half.Z) + offset
+    }
+
+    local currentColor = getESPColorForPlayer(box.player)
+    for _, line in ipairs(box.lines) do
+        line.Color = currentColor
+    end
+
+    for i, edge in ipairs(box.edges) do
+        local c1 = box.corners[edge[1]]
+        local c2 = box.corners[edge[2]]
+        local s1, v1 = Camera:WorldToViewportPoint(c1)
+        local s2, v2 = Camera:WorldToViewportPoint(c2)
+        if v1 and v2 then
+            box.lines[i].Visible = visualsEnabled and not streamModeEnabled
+            box.lines[i].From = Vector2.new(s1.X, s1.Y)
+            box.lines[i].To = Vector2.new(s2.X, s2.Y)
+        else
+            box.lines[i].Visible = false
+        end
+    end
+
+    return true
+end
+
+local function destroyOutlineBox(box)
+    if not box then return end
+    for _, line in ipairs(box.lines) do
+        pcall(function() line:Remove() end)
+    end
+end
+
+local function destroy2DBox(box)
+    if not box then return end
+    pcall(function()
+        box.topLeft:Remove()
+        box.topRight:Remove()
+        box.bottomLeft:Remove()
+        box.bottomRight:Remove()
+        box.distanceLabel:Remove()
+    end)
+end
+
+-- ESP TRACERS
+local function createTracer(player)
+    local tracer = Drawing.new("Line")
+    tracer.Visible = false
+    tracer.Color = getESPColorForPlayer(player)
+    tracer.Thickness = 1
+    tracer.Transparency = 1
+    return tracer
+end
+
+local function updateTracer(tracer, player)
+    if not shouldShowESP(player) then
+        tracer.Visible = false
+        return
+    end
+    
+    if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+        tracer.Visible = false
+        return
+    end
+    
+    local hrp = player.Character.HumanoidRootPart
+    local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+    
+    tracer.Color = getESPColorForPlayer(player)
+    
+    if onScreen and espTracersEnabled and not streamModeEnabled then
+        tracer.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+        tracer.To = Vector2.new(pos.X, pos.Y)
+        tracer.Visible = true
+    else
+        tracer.Visible = false
+    end
+end
+
+-- HITBOX EXPANSION
+local function expandHitbox(player)
+    if not player.Character then return end
+    
+    for _, part in pairs(player.Character:GetChildren()) do
+        if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+            if not hitboxOriginalSizes[part] then
+                hitboxOriginalSizes[part] = part.Size
+            end
+            
+            if hitboxEnabled then
+                part.Size = Vector3.new(hitboxSize, hitboxSize, hitboxSize)
+                part.Transparency = hitboxTransparency
+                part.CanCollide = false
+            else
+                if hitboxOriginalSizes[part] then
+                    part.Size = hitboxOriginalSizes[part]
+                    part.Transparency = 0
+                    part.CanCollide = true
+                end
+            end
+        end
+    end
+end
+
+-- GUN MODS
+local function modifyGuns()
+    if not ReplicatedStorage:FindFirstChild("Weapons") then return end
+    
+    for _, weapon in pairs(ReplicatedStorage.Weapons:GetDescendants()) do
+        if noRecoilEnabled and (weapon.Name == "RecoilControl" or weapon.Name == "Recoil") then
+            if not originalProperties[weapon] then
+                originalProperties[weapon] = weapon.Value
+            end
+            weapon.Value = 0
+        elseif originalProperties[weapon] and (weapon.Name == "RecoilControl" or weapon.Name == "Recoil") then
+            weapon.Value = originalProperties[weapon]
+        end
+        
+        if noSpreadEnabled and (weapon.Name == "MaxSpread" or weapon.Name == "Spread" or weapon.Name == "SpreadControl") then
+            if not originalProperties[weapon] then
+                originalProperties[weapon] = weapon.Value
+            end
+            weapon.Value = 0
+        elseif originalProperties[weapon] and (weapon.Name == "MaxSpread" or weapon.Name == "Spread" or weapon.Name == "SpreadControl") then
+            weapon.Value = originalProperties[weapon]
+        end
+        
+        if fastFireRateEnabled and (weapon.Name == "FireRate" or weapon.Name == "BFireRate") then
+            if not originalProperties[weapon] then
+                originalProperties[weapon] = weapon.Value
+            end
+            weapon.Value = 0.02
+        elseif originalProperties[weapon] and (weapon.Name == "FireRate" or weapon.Name == "BFireRate") then
+            weapon.Value = originalProperties[weapon]
+        end
+        
+        if infiniteAmmoV1 and (weapon.Name == "ReloadTime" or weapon.Name == "EReloadTime") then
+            if not originalProperties[weapon] then
+                originalProperties[weapon] = weapon.Value
+            end
+            weapon.Value = 0.01
+        elseif originalProperties[weapon] and (weapon.Name == "ReloadTime" or weapon.Name == "EReloadTime") then
+            weapon.Value = originalProperties[weapon]
+        end
+    end
+end
+
+-- ANTI-AIM/SPINBOT
+local function setupAntiAim()
+    local character = LocalPlayer.Character
+    local hrp = character and character:FindFirstChild("HumanoidRootPart")
+    
+    if antiAimEnabled and hrp then
+        if not hrp:FindFirstChild("AntiAimSpin") then
+            local spin = Instance.new("BodyAngularVelocity")
+            spin.Name = "AntiAimSpin"
+            spin.AngularVelocity = Vector3.new(0, spinSpeed, 0)
+            spin.MaxTorque = Vector3.new(0, math.huge, 0)
+            spin.P = 500000
+            spin.Parent = hrp
+        else
+            hrp.AntiAimSpin.AngularVelocity = Vector3.new(0, spinSpeed, 0)
+        end
+    elseif hrp then
+        local spin = hrp:FindFirstChild("AntiAimSpin")
+        if spin then spin:Destroy() end
+    end
+end
+
+-- XRAY VISION
+local function toggleXray()
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            if xrayEnabled then
+                if not originalProperties[obj] then
+                    originalProperties[obj] = obj.Transparency
+                end
+                obj.Transparency = obj.Transparency + 0.5
+                if obj.Transparency > 0.95 then
+                    obj.Transparency = 0.95
+                end
+            elseif originalProperties[obj] then
+                obj.Transparency = originalProperties[obj]
+                originalProperties[obj] = nil
+            end
+        end
+    end
+end
+
+-- RAINBOW GUN
+local rainbowHue = 0
+local function updateRainbowGun()
+    if not rainbowGunEnabled then return end
+    
+    if workspace.Camera:FindFirstChild("Arms") then
+        for _, v in pairs(workspace.Camera.Arms:GetDescendants()) do
+            if v:IsA("MeshPart") or v:IsA("BasePart") then
+                v.Color = Color3.fromHSV(rainbowHue, 1, 1)
+            end
+        end
+    end
+    
+    rainbowHue = rainbowHue + 0.01
+    if rainbowHue > 1 then rainbowHue = 0 end
+end
+
+-- ADMIN DETECTION
+local function checkForAdmins()
+    if not adminCheckEnabled then return end
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local isAdmin = false
+            
+            if player:GetRankInGroup(game.CreatorId) >= 250 then
+                isAdmin = true
+            end
+            
+            if player.UserId == game.CreatorId then
+                isAdmin = true
+            end
+            
+            if isAdmin then
+                showNotification("⚠️ ADMIN DETECTED: " .. player.Name, Color3.fromRGB(255, 50, 50))
+            end
+        end
+    end
+end
+
+-- PERFORMANCE DISPLAY
+local perfLabel = Drawing.new("Text")
+perfLabel.Visible = false
+perfLabel.Color = Color3.fromRGB(0, 255, 0)
+perfLabel.Text = "FPS: 0 | Ping: 0ms"
+perfLabel.Size = 16
+perfLabel.Font = 2
+perfLabel.Position = Vector2.new(10, 10)
+
+-- ESP LOOP
+task.spawn(function()
+    while true do
+        wait(0.1)
+        
+        if espRGBMode then
+            espRGBHue = espRGBHue + 0.01
+            if espRGBHue > 1 then espRGBHue = 0 end
+        end
+
+        for char, box in pairs(espBoxes) do
+            if not char or not char.Parent or not char:FindFirstChild("HumanoidRootPart") then
+                destroyOutlineBox(box)
+                espBoxes[char] = nil
+            end
+        end
+        
+        for player, box in pairs(esp2DBoxes) do
+            if not player or not player.Parent or not player.Character then
+                destroy2DBox(box)
+                esp2DBoxes[player] = nil
+            end
+        end
+
+        for _, player in pairs(Players:GetPlayers()) do
+            if player == LocalPlayer then continue end
+            if not player.Character then continue end
+
+            if not espBoxes[player.Character] then
+                local box = createOutlineBox(player.Character, player)
+                if box then
+                    espBoxes[player.Character] = box
+                end
+            end
+            
+            if not esp2DBoxes[player] then
+                local box2d = create2DBox(player)
+                if box2d then
+                    esp2DBoxes[player] = box2d
+                end
+            end
+        end
+        
+        for player, tracer in pairs(espTracers) do
+            if not player or not player.Parent then
+                tracer:Remove()
+                espTracers[player] = nil
+            else
+                updateTracer(tracer, player)
+            end
+        end
+        
+        for _, player in pairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and not espTracers[player] then
+                espTracers[player] = createTracer(player)
+            end
+        end
+        
+        if hitboxEnabled then
+            for _, player in pairs(Players:GetPlayers()) do
+                if player ~= LocalPlayer and player.Character then
+                    expandHitbox(player)
+                end
+            end
+        end
+        
+        if brightSkinsEnabled then
+            toggleBrightSkins()
+        end
+    end
+end)
+
+-- Character respawn handler
+LocalPlayer.CharacterAdded:Connect(function()
+    wait(0.5)
+    setupNoclip()
+    setupAntiAim()
+    setupInfiniteAmmo()
+    updateThirdPerson()
+end)
+
+Players.PlayerAdded:Connect(function(player)
+    wait(1)
+    checkForAdmins()
+end)
+
+-- MAIN RENDER LOOP
+RunService.RenderStepped:Connect(function()
+    -- Update FOV circle position (using the working method)
+    updateFOVCircle()
+    
+    -- Show/hide FOV based on settings
+    if showFOVCircle and not streamModeEnabled then
+        FOVring.Visible = true
+        FOVringOutline.Visible = true
+        
+        -- Update colors for RGB mode
+        if espRGBMode then
+            local hue = tick() % 5 / 5
+            FOVring.Color = Color3.fromHSV(hue, 1, 1)
+        else
+            FOVring.Color = Color3.fromRGB(0, 255, 255)
+        end
+    else
+        FOVring.Visible = false
+        FOVringOutline.Visible = false
+    end
+    
+    frameCount = frameCount + 1
+    local now = tick()
+    if now - lastFPSUpdate >= 1 then
+        currentFPS = frameCount
+        frameCount = 0
+        lastFPSUpdate = now
+    end
+    
+    if showPerformance and not streamModeEnabled then
+        local ping = math.floor(LocalPlayer:GetNetworkPing() * 1000)
+        local memory = math.floor(collectgarbage("count"))
+        local uptime = math.floor(tick() - scriptStartTime)
+        perfLabel.Text = string.format("FPS: %d | Ping: %dms | Mem: %dKB | Up: %ds", 
+            currentFPS, ping, memory, uptime)
+        perfLabel.Visible = true
+    else
+        perfLabel.Visible = false
+    end
+
+    updateRainbowGun()
+
+    for char, box in pairs(espBoxes) do
+        if not updateOutlineBox(box) then
+            destroyOutlineBox(box)
+            espBoxes[char] = nil
+        end
+    end
+    
+    for player, box in pairs(esp2DBoxes) do
+        if not update2DBox(box) then
+            destroy2DBox(box)
+            esp2DBoxes[player] = nil
+        end
+    end
+
+    if not aimbotEnabled then return end
+
+    local fovTarget = getTargetInFOV()
+    
+    if fovTarget and fovTarget.Character and fovTarget.Character:FindFirstChild(targetPart) then
+        local headPos = fovTarget.Character[targetPart].Position
+        
+        if realisticMode then
+            local lookCFrame = getRealisticAimCFrame(headPos)
+            Camera.CFrame = lookCFrame
+        else
+            Camera.CFrame = CFrame.new(Camera.CFrame.Position, headPos)
+        end
+        
+        currentTarget = fovTarget
+        lastTargetEvaluation = tick()
+        return
+    end
+    
+    if autoTargetEnabled then
+        updateTarget()
+        if currentTarget and currentTarget.Character and currentTarget.Character:FindFirstChild(targetPart) then
+            local targetPos = currentTarget.Character[targetPart].Position
+            
+            if fullLockEnabled then
+                if realisticMode then
+                    local lookCFrame = getRealisticAimCFrame(targetPos)
+                    Camera.CFrame = lookCFrame
+                else
+                    Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetPos)
+                end
+            else
+                local currentCFrame = Camera.CFrame
+                if realisticMode then
+                    local lookCFrame = getRealisticAimCFrame(targetPos)
+                    Camera.CFrame = currentCFrame:Lerp(lookCFrame, lerpSpeed)
+                else
+                    local lookCFrame = CFrame.new(currentCFrame.Position, targetPos)
+                    Camera.CFrame = currentCFrame:Lerp(lookCFrame, lerpSpeed)
+                end
+            end
+        end
+    end
+end)
+
+-- GUI WITH TABS AND TOOLTIPS
+local screenGui = Instance.new("ScreenGui")
+screenGui.ResetOnSpawn = false
+screenGui.Name = "CompactAimGui"
+screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+-- Toggle Button
+local iconBtn = Instance.new("TextButton")
+iconBtn.Size = UDim2.new(0, 44, 0, 44)
+iconBtn.Position = UDim2.new(0.02, 0, 0.3, 0)
+iconBtn.Text = "⚡"
+iconBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+iconBtn.BackgroundTransparency = 0.3
+iconBtn.BorderColor3 = Color3.fromRGB(0, 200, 255)
+iconBtn.BorderSizePixel = 2
+iconBtn.TextColor3 = Color3.fromRGB(0, 255, 255)
+iconBtn.Font = Enum.Font.GothamBold
+iconBtn.TextScaled = true
+iconBtn.Parent = screenGui
+
+-- Main Frame
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 280, 0, 400)
+mainFrame.Position = UDim2.new(0.1, 0, 0.3, 0)
+mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+mainFrame.BackgroundTransparency = 0.2
+mainFrame.BorderColor3 = Color3.fromRGB(0, 180, 220)
+mainFrame.BorderSizePixel = 2
+mainFrame.Visible = true
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.ClipsDescendants = true
+mainFrame.Parent = screenGui
+
+-- Title
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 25)
+title.BackgroundTransparency = 1
+title.TextColor3 = Color3.fromRGB(0, 255, 255)
+title.Text = "ENHANCED AIMBOT v2"
+title.Font = Enum.Font.GothamBold
+title.TextScaled = true
+title.Parent = mainFrame
+
+-- Tooltip Label
+local tooltipLabel = Instance.new("TextLabel")
+tooltipLabel.Size = UDim2.new(0, 200, 0, 50)
+tooltipLabel.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+tooltipLabel.BorderColor3 = Color3.fromRGB(0, 255, 255)
+tooltipLabel.BorderSizePixel = 1
+tooltipLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+tooltipLabel.Text = ""
+tooltipLabel.Font = Enum.Font.Gotham
+tooltipLabel.TextScaled = true
+tooltipLabel.TextWrapped = true
+tooltipLabel.Visible = false
+tooltipLabel.ZIndex = 10
+tooltipLabel.Parent = screenGui
+
+-- Tab Container
+local tabContainer = Instance.new("Frame")
+tabContainer.Size = UDim2.new(1, 0, 0, 30)
+tabContainer.Position = UDim2.new(0, 0, 0, 25)
+tabContainer.BackgroundTransparency = 1
+tabContainer.Parent = mainFrame
+
+-- Content Frame
+local contentFrame = Instance.new("Frame")
+contentFrame.Size = UDim2.new(1, 0, 1, -55)
+contentFrame.Position = UDim2.new(0, 0, 0, 55)
+contentFrame.BackgroundTransparency = 1
+contentFrame.Parent = mainFrame
+
+-- Tab Pages
+local pages = {}
+local tabButtons = {}
+
+local function createTab(name)
+    local tabBtn = Instance.new("TextButton")
+    tabBtn.Size = UDim2.new(0.2, -2, 1, 0)
+    tabBtn.Position = UDim2.new(0.2 * #tabButtons, 2, 0, 0)
+    tabBtn.Text = name
+    tabBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    tabBtn.BorderSizePixel = 0
+    tabBtn.TextColor3 = Color3.fromRGB(150, 150, 150)
+    tabBtn.Font = Enum.Font.Gotham
+    tabBtn.TextScaled = true
+    tabBtn.Parent = tabContainer
+    
+    local page = Instance.new("ScrollingFrame")
+    page.Size = UDim2.new(1, 0, 1, 0)
+    page.BackgroundTransparency = 1
+    page.BorderSizePixel = 0
+    page.ScrollBarThickness = 4
+    page.ScrollBarImageColor3 = Color3.fromRGB(0, 150, 200)
+    page.CanvasSize = UDim2.new(0, 0, 0, 500)
+    page.Visible = false
+    page.Parent = contentFrame
+    
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 5)
+    layout.Parent = page
+    
+    tabBtn.MouseButton1Click:Connect(function()
+        for _, p in pairs(pages) do
+            p.Visible = false
+        end
+        for _, b in pairs(tabButtons) do
+            b.TextColor3 = Color3.fromRGB(150, 150, 150)
+            b.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+        end
+        page.Visible = true
+        tabBtn.TextColor3 = Color3.fromRGB(0, 255, 255)
+        tabBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    end)
+    
+    table.insert(pages, page)
+    table.insert(tabButtons, tabBtn)
+    
+    return page
+end
+
+local function createToggle(parent, name, default, callback, tooltip)
+    local container = Instance.new("Frame")
+    container.Size = UDim2.new(1, -10, 0, 30)
+    container.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    container.BackgroundTransparency = 0.4
+    container.BorderSizePixel = 0
+    container.Parent = parent
+    
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.BackgroundTransparency = 1
+    btn.TextColor3 = default and Color3.fromRGB(0, 255, 100) or Color3.fromRGB(255, 100, 100)
+    btn.Text = name .. ": " .. (default and "ON" or "OFF")
+    btn.Font = Enum.Font.Gotham
+    btn.TextScaled = true
+    btn.Parent = container
+    
+    -- Add tooltip on hover
+    if tooltip then
+        btn.MouseEnter:Connect(function()
+            tooltipLabel.Text = tooltip
+            tooltipLabel.Visible = true
+            tooltipLabel.Position = UDim2.new(0, btn.AbsolutePosition.X + btn.AbsoluteSize.X + 5, 0, btn.AbsolutePosition.Y)
+        end)
+        
+        btn.MouseLeave:Connect(function()
+            tooltipLabel.Visible = false
+        end)
+    end
+    
+    local state = default
+    btn.MouseButton1Click:Connect(function()
+        state = not state
+        btn.TextColor3 = state and Color3.fromRGB(0, 255, 100) or Color3.fromRGB(255, 100, 100)
+        btn.Text = name .. ": " .. (state and "ON" or "OFF")
+        callback(state)
+    end)
+    
+    return btn
+end
+
+local function createTextBox(parent, name, defaultValue, color, updateFunc, tooltip)
+    local container = Instance.new("Frame")
+    container.Size = UDim2.new(1, -10, 0, 45)
+    container.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    container.BackgroundTransparency = 0.4
+    container.BorderSizePixel = 0
+    container.Parent = parent
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 0, 15)
+    label.Position = UDim2.new(0, 0, 0, 2)
+    label.BackgroundTransparency = 1
+    label.TextColor3 = color
+    label.Text = name
+    label.Font = Enum.Font.Gotham
+    label.TextScaled = true
+    label.Parent = container
+
+    local textBox = Instance.new("TextBox")
+    textBox.Size = UDim2.new(0.8, 0, 0, 20)
+    textBox.Position = UDim2.new(0.1, 0, 0, 20)
+    textBox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    textBox.BorderColor3 = color
+    textBox.BorderSizePixel = 1
+    textBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+    textBox.Text = tostring(defaultValue)
+    textBox.Font = Enum.Font.Gotham
+    textBox.TextScaled = true
+    textBox.ClearTextOnFocus = false
+    textBox.Parent = container
+
+    -- Add tooltip on hover
+    if tooltip then
+        container.MouseEnter:Connect(function()
+            tooltipLabel.Text = tooltip
+            tooltipLabel.Visible = true
+            tooltipLabel.Position = UDim2.new(0, container.AbsolutePosition.X + container.AbsoluteSize.X + 5, 0, container.AbsolutePosition.Y)
+        end)
+        
+        container.MouseLeave:Connect(function()
+            tooltipLabel.Visible = false
+        end)
+    end
+
+    textBox.FocusLost:Connect(function(enterPressed)
+        local value = tonumber(textBox.Text)
+        if value then
+            updateFunc(value)
+            showNotification(name .. ": " .. tostring(value), color)
+        else
+            textBox.Text = tostring(defaultValue)
+            showNotification("Invalid input! Using default value", Color3.fromRGB(255, 100, 100))
+        end
+    end)
+
+    return textBox
+end
+
+-- Create tabs
+local aimTab = createTab("Aim")
+local espTab = createTab("ESP")
+local combatTab = createTab("Combat")
+local movementTab = createTab("Move")
+local miscTab = createTab("Misc")
+
+-- Make first tab visible by default
+pages[1].Visible = true
+tabButtons[1].TextColor3 = Color3.fromRGB(0, 255, 255)
+tabButtons[1].BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+
+-- AIM TAB
+createToggle(aimTab, "Aimbot", aimbotEnabled, function(state)
+    aimbotEnabled = state
+    showNotification("AIMBOT: " .. (state and "ON" or "OFF"), state and Color3.fromRGB(0,255,100) or Color3.fromRGB(255,100,100))
+end, "Automatically aim at enemies [Q to toggle]")
+
+createToggle(aimTab, "Team Check", teamCheck, function(state)
+    teamCheck = state
+end, "Only target enemies, not teammates")
+
+createToggle(aimTab, "Wall Check", wallCheck, function(state)
+    wallCheck = state
+end, "Only target visible enemies")
+
+createToggle(aimTab, "Auto Target", autoTargetEnabled, function(state)
+    autoTargetEnabled = state
+    if not state then currentTarget = nil end
+end, "Automatically find and lock onto targets")
+
+createToggle(aimTab, "Realistic Mode", realisticMode, function(state)
+    realisticMode = state
+end, "Add human-like movement to aimbot")
+
+createToggle(aimTab, "Full Lock", fullLockEnabled, function(state)
+    fullLockEnabled = state
+end, "Instant lock instead of smooth aim")
+
+createToggle(aimTab, "Show FOV Circle", showFOVCircle, function(state)
+    showFOVCircle = state
+    FOVring.Visible = state and not streamModeEnabled
+    FOVringOutline.Visible = state and not streamModeEnabled
+end, "Display FOV circle for aimbot range")
+
+createTextBox(aimTab, "FOV Radius", FOVRadius, Color3.fromRGB(0, 255, 255), function(value)
+    FOVRadius = math.clamp(value, 10, 300)
+    FOVring.Radius = FOVRadius
+    FOVringOutline.Radius = FOVRadius + 2
+end, "Size of FOV circle (10-300)")
+
+createTextBox(aimTab, "Lerp Speed", lerpSpeed, Color3.fromRGB(255, 255, 255), function(value)
+    lerpSpeed = math.clamp(value, 0.05, 0.5)
+end, "Smoothness of aim (0.05-0.5)")
+
+createTextBox(aimTab, "Max Distance", maxTargetDistance, Color3.fromRGB(255, 200, 100), function(value)
+    maxTargetDistance = math.clamp(value, 50, 2000)
+end, "Maximum targeting distance (50-2000)")
+
+-- ESP TAB
+createToggle(espTab, "3D Boxes", visualsEnabled, function(state)
+    visualsEnabled = state
+end, "Show 3D boxes around players")
+
+createToggle(espTab, "2D Boxes", esp2DBoxEnabled, function(state)
+    esp2DBoxEnabled = state
+end, "Show 2D corner boxes on players")
+
+createToggle(espTab, "Tracers", espTracersEnabled, function(state)
+    espTracersEnabled = state
+end, "Draw lines from bottom to players")
+
+createToggle(espTab, "Distance", espDistanceEnabled, function(state)
+    espDistanceEnabled = state
+end, "Show distance to players")
+
+createToggle(espTab, "Team Check", espTeamCheck, function(state)
+    espTeamCheck = state
+    showNotification("ESP TEAM CHECK: " .. (state and "ON" or "OFF"), state and Color3.fromRGB(100,255,100) or Color3.fromRGB(255,100,100))
+end, "Color code ESP by team")
+
+createToggle(espTab, "Show Teammates", espShowTeam, function(state)
+    espShowTeam = state
+    showNotification("SHOW TEAMMATES: " .. (state and "ON" or "OFF"), state and Color3.fromRGB(100,255,100) or Color3.fromRGB(150,150,150))
+end, "Display ESP on teammates")
+
+createToggle(espTab, "RGB Mode", espRGBMode, function(state)
+    espRGBMode = state
+    showNotification("ESP RGB MODE: " .. (state and "ON" or "OFF"), state and Color3.fromHSV(espRGBHue, 1, 1) or espColor)
+end, "Rainbow colored ESP")
+
+createToggle(espTab, "Xray Vision", xrayEnabled, function(state)
+    xrayEnabled = state
+    toggleXray()
+end, "See through walls")
+
+createToggle(espTab, "Bright Skins", brightSkinsEnabled, function(state)
+    brightSkinsEnabled = state
+    toggleBrightSkins()
+    showNotification("BRIGHT SKINS: " .. (state and "ON" or "OFF"), state and Color3.fromRGB(255,255,0) or Color3.fromRGB(150,150,150))
+end, "Make players glow bright colors")
+
+-- COMBAT TAB
+createToggle(combatTab, "Hitbox Expander", hitboxEnabled, function(state)
+    hitboxEnabled = state
+    showNotification("HITBOX: " .. (state and "ON" or "OFF"), state and Color3.fromRGB(255,255,0) or Color3.fromRGB(150,150,150))
+end, "Increase enemy hitbox size")
+
+createTextBox(combatTab, "Hitbox Size", hitboxSize, Color3.fromRGB(255, 255, 0), function(value)
+    hitboxSize = math.clamp(value, 1, 50)
+end, "Size of expanded hitboxes (1-50)")
+
+createToggle(combatTab, "3rd Person", thirdPersonEnabled, function(state)
+    thirdPersonEnabled = state
+    updateThirdPerson()
+    showNotification("3RD PERSON: " .. (state and "ON" or "OFF"), state and Color3.fromRGB(100,255,255) or Color3.fromRGB(150,150,150))
+end, "Enable third person view")
+
+createTextBox(combatTab, "3rd Person Dist", thirdPersonDistance, Color3.fromRGB(100, 255, 255), function(value)
+    thirdPersonDistance = math.clamp(value, 5, 50)
+    if thirdPersonEnabled then
+        updateThirdPerson()
+    end
+end, "Third person camera distance (5-50)")
+
+createToggle(combatTab, "Infinite Ammo V1", infiniteAmmoV1, function(state)
+    infiniteAmmoV1 = state
+    setupInfiniteAmmo()
+    modifyGuns()
+    showNotification("INFINITE AMMO V1: " .. (state and "ON" or "OFF"), state and Color3.fromRGB(255,255,0) or Color3.fromRGB(150,150,150))
+end, "Unlimited ammo method 1")
+
+createToggle(combatTab, "Infinite Ammo V2", infiniteAmmoV2, function(state)
+    infiniteAmmoV2 = state
+    showNotification("INFINITE AMMO V2: " .. (state and "ON" or "OFF"), state and Color3.fromRGB(255,200,0) or Color3.fromRGB(150,150,150))
+end, "Unlimited ammo method 2")
+
+createToggle(combatTab, "No Recoil", noRecoilEnabled, function(state)
+    noRecoilEnabled = state
+    modifyGuns()
+end, "Remove weapon recoil")
+
+createToggle(combatTab, "No Spread", noSpreadEnabled, function(state)
+    noSpreadEnabled = state
+    modifyGuns()
+end, "Remove bullet spread")
+
+createToggle(combatTab, "Fast Fire Rate", fastFireRateEnabled, function(state)
+    fastFireRateEnabled = state
+    modifyGuns()
+end, "Increase fire rate")
+
+createToggle(combatTab, "Anti-Aim", antiAimEnabled, function(state)
+    antiAimEnabled = state
+    setupAntiAim()
+end, "Spin to confuse enemies")
+
+createTextBox(combatTab, "Spin Speed", spinSpeed, Color3.fromRGB(255, 100, 255), function(value)
+    spinSpeed = math.clamp(value, 1, 100)
+    if antiAimEnabled then
+        setupAntiAim()
+    end
+end, "Anti-aim spin speed (1-100)")
+
+-- MOVEMENT TAB
+createToggle(movementTab, "Noclip", noclipEnabled, function(state)
+    noclipEnabled = state
+    setupNoclip()
+    showNotification("NOCLIP: " .. (state and "ON" or "OFF"), state and Color3.fromRGB(255,100,255) or Color3.fromRGB(150,150,150))
+end, "Walk through walls")
+
+createTextBox(movementTab, "Noclip Speed", noclipSpeed, Color3.fromRGB(255, 100, 255), function(value)
+    noclipSpeed = math.clamp(value, 10, 200)
+end, "Noclip movement speed (10-200)")
+
+-- MISC TAB
+createToggle(miscTab, "Stream Mode", streamModeEnabled, function(state)
+    streamModeEnabled = state
+    toggleStreamMode()
+end, "Hide all visuals for streaming")
+
+createToggle(miscTab, "FPS Boost", fpsBoostEnabled, function(state)
+    fpsBoostEnabled = state
+    if state then
+        applyFPSBoost()
+    else
+        removeFPSBoost()
+    end
+end, "Optimize game for better FPS")
+
+createTextBox(miscTab, "FPS Level", fpsBoostLevel, Color3.fromRGB(100, 255, 100), function(value)
+    fpsBoostLevel = math.clamp(math.floor(value), 1, 3)
+    if fpsBoostEnabled then
+        removeFPSBoost()
+        applyFPSBoost()
+    end
+end, "FPS boost intensity (1-3)")
+
+createToggle(miscTab, "Rainbow Gun", rainbowGunEnabled, function(state)
+    rainbowGunEnabled = state
+end, "Rainbow colored weapon")
+
+createToggle(miscTab, "Admin Check", adminCheckEnabled, function(state)
+    adminCheckEnabled = state
+    if state then checkForAdmins() end
+end, "Alert when admins join")
+
+createToggle(miscTab, "Performance", showPerformance, function(state)
+    showPerformance = state
+end, "Show FPS and stats")
+
+-- Panic key selector
+local panicKeyBtn = Instance.new("TextButton")
+panicKeyBtn.Size = UDim2.new(1, -10, 0, 30)
+panicKeyBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+panicKeyBtn.BackgroundTransparency = 0.4
+panicKeyBtn.BorderSizePixel = 0
+panicKeyBtn.TextColor3 = Color3.fromRGB(255, 100, 100)
+panicKeyBtn.Text = "Panic Key: " .. tostring(panicKey.Name)
+panicKeyBtn.Font = Enum.Font.Gotham
+panicKeyBtn.TextScaled = true
+panicKeyBtn.Parent = miscTab
+
+local selectingPanic = false
+panicKeyBtn.MouseButton1Click:Connect(function()
+    selectingPanic = true
+    panicKeyBtn.Text = "Press any key..."
+    panicKeyBtn.TextColor3 = Color3.fromRGB(255, 255, 0)
+end)
+
+panicKeyBtn.MouseEnter:Connect(function()
+    tooltipLabel.Text = "Click to set panic key (disables all)"
+    tooltipLabel.Visible = true
+    tooltipLabel.Position = UDim2.new(0, panicKeyBtn.AbsolutePosition.X + panicKeyBtn.AbsoluteSize.X + 5, 0, panicKeyBtn.AbsolutePosition.Y)
+end)
+
+panicKeyBtn.MouseLeave:Connect(function()
+    tooltipLabel.Visible = false
+end)
+
+-- Toggle GUI visibility
+iconBtn.MouseButton1Click:Connect(function()
+    mainFrame.Visible = not mainFrame.Visible
+end)
+
+-- Keybinds
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if selectingPanic and not gpe then
+        panicKey = input.KeyCode
+        panicKeyBtn.Text = "Panic Key: " .. tostring(panicKey.Name)
+        panicKeyBtn.TextColor3 = Color3.fromRGB(255, 100, 100)
+        selectingPanic = false
+        showNotification("Panic key set to: " .. tostring(panicKey.Name), Color3.fromRGB(255, 255, 0))
+        return
+    end
+    
+    if gpe then return end
+    
+    if input.KeyCode == Enum.KeyCode.Q then
+        aimbotEnabled = not aimbotEnabled
+        showNotification("AIMBOT: " .. (aimbotEnabled and "ON" or "OFF"), 
+            aimbotEnabled and Color3.fromRGB(0,255,100) or Color3.fromRGB(255,100,100))
+    end
+    
+    if input.KeyCode == panicKey then
+        -- Panic mode - disable everything
+        aimbotEnabled = false
+        hitboxEnabled = false
+        esp2DBoxEnabled = false
+        espTracersEnabled = false
+        visualsEnabled = false
+        antiAimEnabled = false
+        xrayEnabled = false
+        rainbowGunEnabled = false
+        infiniteAmmoV1 = false
+        infiniteAmmoV2 = false
+        fpsBoostEnabled = false
+        brightSkinsEnabled = false
+        noclipEnabled = false
+        thirdPersonEnabled = false
+        streamModeEnabled = false
+        currentTarget = nil
+        
+        setupAntiAim()
+        toggleXray()
+        setupInfiniteAmmo()
+        removeFPSBoost()
+        toggleBrightSkins()
+        setupNoclip()
+        updateThirdPerson()
+        
+        -- Also hide FOV circle
+        FOVring.Visible = false
+        FOVringOutline.Visible = false
+        showFOVCircle = false
+        
+        showNotification("⚠️ PANIC MODE - ALL FEATURES DISABLED", Color3.fromRGB(255, 50, 50))
+    end
+end)
+
+-- Initialize
+showNotification("ENHANCED AIMBOT v2 LOADED", Color3.fromRGB(0,255,255))
+showNotification("FOV CIRCLE ACTIVE | Q = Toggle | " .. tostring(panicKey.Name) .. " = Panic", Color3.fromRGB(255,255,0))
+setupNoclip()
+setupInfiniteAmmo()
+checkForAdmins()
+updateThirdPerson()
+
+-- Make sure FOV circle is visible on start
+FOVring.Visible = true
+FOVringOutline.Visible = true
